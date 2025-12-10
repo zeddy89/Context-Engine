@@ -302,109 +302,229 @@ def print_status_bar(status: dict, session: int):
 # ============================================================================
 
 def build_qa_prompt(feature: dict, session_num: int, project_path: Path) -> str:
-    """Build special prompt for QA features that can generate fix features."""
+    """Build comprehensive QA prompt that thoroughly tests features."""
     feature_id = feature.get("id", "unknown")
     feature_desc = feature.get("description", "")
+    feature_name = feature.get("name", "")
     
-    return f"""Session {session_num}: QA Testing with Playwright
+    return f"""Session {session_num}: Comprehensive QA Testing
 
-## Feature to Test
+## Feature Under Test
 {json.dumps(feature, indent=2)}
 
-## STEP 1: Start the Application
-Ensure backend and frontend are running:
+## STEP 1: Environment Setup
+Ensure the application is running:
 ```bash
-# Check if services are running, start if needed
-# Backend: typically cargo run or npm run dev
-# Frontend: typically npm run dev in frontend/
+# Start backend (check if already running first)
+# Start frontend (check if already running first)  
+# Verify both are accessible
 ```
 
-## STEP 2: Use Playwright MCP to Test
-{feature_desc}
-
-Take screenshots of any failures or unexpected behavior.
-
-## STEP 3: Evaluate Results
-
-### If ALL tests PASS:
-Mark the feature complete:
+## STEP 2: Understand What to Test
+Before testing, review what this feature SHOULD do:
 ```bash
-.agent/commands.sh success "{feature_id}" "All tests passed - [brief summary]"
+# Check the original feature implementation
+git log --oneline --grep="{feature_id}" | head -5
+
+# Review related code files
+# Read app_spec.md for expected behavior
+```
+
+## STEP 3: Comprehensive Playwright Testing
+
+Use Playwright MCP to test EVERY aspect of this feature:
+
+### A. VISUAL INSPECTION
+- [ ] Page loads without console errors
+- [ ] Layout matches expected design (no overlapping elements, proper spacing)
+- [ ] Typography is readable (font sizes, contrast)
+- [ ] Colors and branding are consistent
+- [ ] Icons/images load correctly (no broken images)
+- [ ] Responsive: Test at desktop (1920px), tablet (768px), mobile (375px)
+- [ ] Dark mode (if applicable): Colors adapt properly
+- Take screenshots at each viewport size
+
+### B. ELEMENT VERIFICATION
+For EVERY interactive element on the page:
+- [ ] Buttons: Are they visible? Clickable? Proper hover states?
+- [ ] Forms: All fields present? Labels correct? Placeholders helpful?
+- [ ] Tables: Headers present? Data displays? Sorting works? Pagination?
+- [ ] Navigation: All links work? Active state shows current page?
+- [ ] Modals/Dialogs: Open correctly? Close on X and outside click?
+- [ ] Dropdowns: Options load? Selection works? Clear option?
+- [ ] Loading states: Spinners show during async operations?
+- [ ] Empty states: Proper messaging when no data?
+
+### C. FUNCTIONALITY TESTING
+Test the COMPLETE user journey:
+
+**Happy Path:**
+1. Perform the primary action this feature enables
+2. Verify data persists (refresh page, check it's still there)
+3. Verify related data updates (counts, timestamps, etc.)
+
+**Input Validation:**
+- [ ] Required fields: Submit empty, verify error messages
+- [ ] Format validation: Invalid email, phone, dates
+- [ ] Length limits: Too short, too long inputs
+- [ ] Special characters: Quotes, unicode, SQL injection attempts
+- [ ] Boundary values: 0, negative numbers, very large numbers
+
+**Error Handling:**
+- [ ] Network error: What happens if API fails?
+- [ ] 404: Navigate to non-existent ID
+- [ ] 403: Attempt unauthorized action
+- [ ] Timeout: Slow network simulation
+- [ ] Duplicate: Try creating duplicate entries
+
+**Edge Cases:**
+- [ ] Empty state: No data yet
+- [ ] Single item: Just one entry
+- [ ] Many items: 100+ entries (pagination, performance)
+- [ ] Long text: Very long names/descriptions
+- [ ] Concurrent: Multiple tabs, same action
+
+### D. DATA INTEGRITY
+- [ ] Create: Data appears in list immediately
+- [ ] Read: Details page shows all fields correctly
+- [ ] Update: Changes persist after refresh
+- [ ] Delete: Item removed, related data cleaned up
+- [ ] Relationships: Linked data updates correctly
+
+### E. ACCESSIBILITY BASICS
+- [ ] Tab navigation: Can reach all interactive elements
+- [ ] Focus indicators: Visible focus ring
+- [ ] Form labels: Inputs have associated labels
+- [ ] Alt text: Images have descriptions
+- [ ] Aria: Critical elements have aria labels
+
+## STEP 4: Document Everything
+
+For EACH issue found, record:
+1. **What**: Exact description of the problem
+2. **Where**: URL, element selector, component
+3. **Steps**: How to reproduce
+4. **Expected**: What should happen
+5. **Actual**: What actually happens
+6. **Severity**: Critical/High/Medium/Low
+7. **Screenshot**: Visual evidence
+
+## STEP 5: Evaluate Results
+
+### If ALL checks PASS:
+```bash
+.agent/commands.sh success "{feature_id}" "Comprehensive QA passed - [summary of what was verified]"
 git add -A
 git commit -m "session: completed {feature_id}"
 ```
 
-### If ANY test FAILS:
-DO NOT mark the QA feature complete. Instead:
+### If ANY issues found:
 
-1. Document the failure in .agent/memory/failures/:
+DO NOT mark complete. Create detailed fix features:
+
 ```bash
-.agent/commands.sh failure "{feature_id}" "What failed and why"
-```
-
-2. Create fix features in a NEW file `fix-features-{feature_id}.json`:
-```json
+cat > fix-features-{feature_id}.json << 'EOF'
 {{
   "generated_from": "{feature_id}",
-  "generated_at": "[timestamp]",
+  "generated_at": "$(date -Iseconds)",
+  "qa_summary": "Brief summary of QA findings",
   "features": [
     {{
       "id": "fix-{feature_id}-001",
-      "name": "Fix: [specific issue]",
-      "description": "Detailed description of what needs to be fixed based on QA failure",
+      "name": "Fix: [Specific UI/UX issue]",
+      "description": "PROBLEM: [Exact issue observed]\\nLOCATION: [File/component path]\\nSTEPS TO REPRODUCE: [1. Go to... 2. Click...]\\nEXPECTED: [What should happen]\\nACTUAL: [What happens instead]\\nFIX APPROACH: [Suggested solution]",
       "priority": 50,
       "category": "bugfix",
-      "passes": false,
-      "qa_origin": "{feature_id}"
+      "severity": "high|medium|low",
+      "qa_origin": "{feature_id}",
+      "passes": false
+    }},
+    {{
+      "id": "fix-{feature_id}-002",
+      "name": "Add: [Missing functionality]",
+      "description": "MISSING: [Feature that should exist but doesn't]\\nLOCATION: [Where it should be]\\nUSER STORY: [As a user, I should be able to...]\\nACCEPTANCE CRITERIA: [1. ... 2. ... 3. ...]\\nIMPLEMENTATION NOTES: [Technical suggestions]",
+      "priority": 50,
+      "category": "enhancement",
+      "severity": "medium",
+      "qa_origin": "{feature_id}",
+      "passes": false
+    }},
+    {{
+      "id": "fix-{feature_id}-003",
+      "name": "Style: [Visual/CSS issue]",
+      "description": "VISUAL ISSUE: [What looks wrong]\\nLOCATION: [Component/page]\\nVIEWPORT: [Desktop/tablet/mobile]\\nEXPECTED: [How it should look]\\nACTUAL: [How it looks]\\nCSS SUGGESTION: [Potential fix]",
+      "priority": 55,
+      "category": "styling",
+      "severity": "low",
+      "qa_origin": "{feature_id}",
+      "passes": false
     }}
   ]
 }}
+EOF
 ```
 
-3. Merge fix features into feature_list.json:
+Then merge into feature_list.json:
 ```bash
-python3 -c "
+python3 << 'PYEOF'
 import json
-from datetime import datetime
 
-# Load existing features
 with open('feature_list.json') as f:
     main = json.load(f)
 
-# Load fix features
 with open('fix-features-{feature_id}.json') as f:
     fixes = json.load(f)
 
-# Add fix features before QA features (priority 50 < 100)
-main['features'].extend(fixes['features'])
+# Add fixes (priority 50-55 runs before QA at 100+)
+for fix in fixes['features']:
+    # Avoid duplicates
+    if not any(f['id'] == fix['id'] for f in main['features']):
+        main['features'].append(fix)
 
-# Save
 with open('feature_list.json', 'w') as f:
     json.dump(main, f, indent=2)
 
-print(f'Added {{len(fixes[\"features\"])}} fix features')
-"
+print(f"Added {{len(fixes['features'])}} fix features from QA")
+PYEOF
 ```
 
-4. Commit the fix features:
+Record failures for context:
+```bash
+.agent/commands.sh failure "{feature_id}" "QA found issues - generated fix features"
+```
+
+Commit the findings:
 ```bash
 git add -A
-git commit -m "session: {feature_id} found issues - generated fix features"
+git commit -m "session: {feature_id} QA findings - generated $(cat fix-features-{feature_id}.json | python3 -c 'import json,sys; print(len(json.load(sys.stdin)[\"features\"]))') fix features"
 ```
 
-5. The QA feature stays incomplete - it will be retried after fixes are implemented.
+## CRITICAL QA RULES
 
-## CRITICAL RULES
-- Use Playwright MCP for ALL browser interactions
-- Take screenshots of failures
-- Be SPECIFIC in fix feature descriptions - include exact error messages, element selectors, expected vs actual behavior
-- Fix features should be atomic and testable
-- DO NOT mark QA complete if tests fail - generate fixes instead
-- Each fix feature should address ONE specific issue
+1. **BE THOROUGH** - Check every element, every state, every edge case
+2. **BE SPECIFIC** - Vague bug reports waste time. Include selectors, steps, evidence.
+3. **BE SYSTEMATIC** - Follow the checklist. Don't skip sections.
+4. **SCREENSHOT EVERYTHING** - Visual evidence prevents "works on my machine"
+5. **TEST LIKE A USER** - What would confuse a real person?
+6. **TEST LIKE A HACKER** - What inputs could break it?
+7. **CATEGORIZE CORRECTLY**:
+   - `bugfix`: Something broken that worked before or should work
+   - `enhancement`: Missing feature that should exist
+   - `styling`: Visual/CSS issues
+   - `accessibility`: A11y problems
+   - `performance`: Slow operations
+8. **PRIORITIZE BY SEVERITY**:
+   - Critical (priority 45): App crashes, data loss, security
+   - High (priority 50): Major feature broken, blocker
+   - Medium (priority 55): Feature degraded, workaround exists
+   - Low (priority 60): Minor annoyance, cosmetic
 
 ## FINAL REMINDER
-QA either PASSES (mark complete) or GENERATES FIX FEATURES (don't mark complete).
-Never just fail silently - always create actionable fix features."""
+
+QA is quality ASSURANCE. Your job is to ensure this feature is production-ready.
+- Pass ONLY if you're confident a real user would have a good experience
+- Generate fix features for ANYTHING that's not right
+- The feature stays incomplete until all issues are resolved"""
 
 def run_session(project_path: Path, session_num: int, model: str) -> bool:
     """Run a single Claude Code session.
