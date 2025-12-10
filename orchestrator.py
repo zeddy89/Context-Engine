@@ -496,17 +496,23 @@ def build_implement_prompt(feature: Dict[str, Any], session_num: int) -> str:
 - DO run cargo test before marking complete
 - DO invoke all three subagents (@code-reviewer, @test-runner, @feature-verifier)
 - DO NOT skip any steps
-- DO NOT mark passes: true unless tests pass AND subagents verify"""
+- DO NOT mark passes: true unless tests pass AND subagents verify
+- DO NOT let any file exceed 500 lines - split into modules if needed
+- If you find existing files over 500 lines, refactor them into smaller modules"""
     elif complexity == 'medium':
         critical_rules = """## CRITICAL RULES
 - DO use Ref MCP to look up docs before coding
 - DO run cargo test before marking complete
 - DO invoke @test-runner to verify tests
-- DO NOT mark passes: true unless tests pass"""
+- DO NOT mark passes: true unless tests pass
+- DO NOT let any file exceed 500 lines - split into modules if needed
+- If you find existing files over 500 lines, refactor them into smaller modules"""
     else:
         critical_rules = """## CRITICAL RULES
 - DO run cargo test before marking complete
-- DO NOT mark passes: true unless tests pass"""
+- DO NOT mark passes: true unless tests pass
+- DO NOT let any file exceed 500 lines - split into modules if needed
+- If you find existing files over 500 lines, refactor them into smaller modules"""
     
     return f"""Session {session_num}: Implement feature [{complexity.upper()} complexity]
 
@@ -542,15 +548,20 @@ If tests fail, fix them before proceeding.
 
 {subagent_instructions}
 
-## STEP 8: Complete (ONLY if all checks pass)
+## STEP 8: MARK COMPLETE (MANDATORY - DO NOT SKIP)
+You MUST run these commands to mark the feature complete:
 ```bash
-# Mark complete in feature_list.json (set passes: true)
-.agent/commands.sh success "{feature_id}" "what worked"
+.agent/commands.sh success "{feature_id}" "brief description of what worked"
 git add -A
 git commit -m "session: completed {feature_id}"
 ```
 
+⚠️ THE SESSION IS NOT COMPLETE UNTIL YOU RUN THE COMMANDS ABOVE ⚠️
+
 {critical_rules}
+
+## FINAL REMINDER
+Your last action MUST be running the git commit. Do not just summarize - execute STEP 8.
 
 If stuck after 3 attempts, mark as blocked and explain why."""
 

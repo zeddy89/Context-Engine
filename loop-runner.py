@@ -330,16 +330,22 @@ def run_session(project_path: Path, session_num: int, model: str) -> bool:
 - DO NOT guess at APIs - look them up first
 - DO NOT mark passes: true unless tests actually pass
 - DO NOT skip the subagents (@code-reviewer, @test-runner, @feature-verifier)
+- DO NOT let any file exceed 500 lines - split into modules if needed
+- If you find existing files over 500 lines, refactor them into smaller modules
 - If tests fail after 3 attempts, mark feature as blocked"""
     elif complexity == 'medium':
         critical_rules = """## CRITICAL RULES
 - DO use MCP tools for unfamiliar APIs
 - DO NOT mark passes: true unless tests pass
 - DO invoke @test-runner to verify
+- DO NOT let any file exceed 500 lines - split into modules if needed
+- If you find existing files over 500 lines, refactor them into smaller modules
 - If tests fail after 3 attempts, mark feature as blocked"""
     else:
         critical_rules = """## CRITICAL RULES
 - DO NOT mark passes: true unless tests pass
+- DO NOT let any file exceed 500 lines - split into modules if needed
+- If you find existing files over 500 lines, refactor them into smaller modules
 - If tests fail after 3 attempts, mark feature as blocked"""
     
     # Build the prompt with complexity-aware subagent requirements
@@ -373,14 +379,20 @@ If tests fail, fix them before proceeding.
 
 {subagent_instructions}
 
-## STEP 8: Update Status (ONLY IF ALL CHECKS PASS)
+## STEP 8: MARK COMPLETE (MANDATORY - DO NOT SKIP)
+You MUST run these commands to mark the feature complete:
 ```bash
-.agent/commands.sh success "{feature_id}" "description of what worked"
+.agent/commands.sh success "{feature_id}" "brief description of what worked"
 git add -A
 git commit -m "session: completed {feature_id}"
 ```
 
-{critical_rules}"""
+⚠️ THE SESSION IS NOT COMPLETE UNTIL YOU RUN THE COMMANDS ABOVE ⚠️
+
+{critical_rules}
+
+## FINAL REMINDER
+Your last action MUST be running the git commit. Do not just summarize - execute STEP 8."""
 
     # Build command - Claude Code uses MCPs from ~/.claude.json (added via 'claude mcp add')
     cmd = [
@@ -511,8 +523,45 @@ CRITICAL:
                 print(yellow(f"⚠️ Feature marked complete but tests failing!"))
             consecutive_failures = 0
         else:
-            print(yellow("⚠️  No progress this session"))
-            consecutive_failures += 1
+            # Tests passed but feature not marked - auto-complete it
+            if verification["tests_passed"]:
+                current_feature = get_next_feature(project_path)
+                if current_feature:
+                    feature_id = current_feature.get("id", "unknown")
+                    print(yellow(f"⚠️  Tests passed but feature not marked - auto-completing {feature_id}"))
+                    
+                    # Mark feature as passed
+                    try:
+                        feature_file = project_path / "feature_list.json"
+                        with open(feature_file) as f:
+                            data = json.load(f)
+                        for feat in data.get("features", []):
+                            if feat.get("id") == feature_id:
+                                feat["passes"] = True
+                                break
+                        with open(feature_file, "w") as f:
+                            json.dump(data, f, indent=2)
+                        
+                        # Commit
+                        subprocess.run(["git", "add", "-A"], cwd=project_path, capture_output=True)
+                        subprocess.run(
+                            ["git", "commit", "-m", f"session: completed {feature_id} (auto-completed by harness)"],
+                            cwd=project_path, capture_output=True
+                        )
+                        print(green(f"✅ Auto-completed {feature_id}"))
+                        consecutive_failures = 0
+                        
+                        # Update status
+                        new_status = get_feature_status(project_path)
+                    except Exception as e:
+                        print(red(f"❌ Auto-complete failed: {e}"))
+                        consecutive_failures += 1
+                else:
+                    print(yellow("⚠️  No progress this session"))
+                    consecutive_failures += 1
+            else:
+                print(yellow("⚠️  No progress this session"))
+                consecutive_failures += 1
         
         if consecutive_failures >= 3:
             print(red("\n❌ Too many consecutive failures"))
