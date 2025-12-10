@@ -34,7 +34,7 @@ Each session starts fresh with computed context instead of accumulated garbage.
 
 The loop runs overnight. Each session: compile context → implement feature → run tests → subagent review → commit → exit. Repeat until done.
 
-![Session 18 running autonomously](docs/session-screenshot.png)
+![Session 18 running autonomously](docs/session-screenshot.jpg)
 
 ## Quick Start
 
