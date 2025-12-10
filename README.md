@@ -37,7 +37,7 @@ The loop ran overnight. Each session: compile context → implement feature → 
 
 ```bash
 # Clone
-git clone https://github.com/yourusername/context-engine.git
+git clone https://github.com/zeddy89/context-engine.git
 cd context-engine
 
 # Install (just copies scripts)

@@ -12,7 +12,7 @@ Thanks for your interest in contributing!
 ## Development Setup
 
 ```bash
-git clone https://github.com/yourusername/context-engine.git
+git clone https://github.com/zeddy89/context-engine.git
 cd context-engine
 
 # No dependencies to install - just Python 3.10+ and Claude Code CLI
