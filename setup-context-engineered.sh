@@ -179,7 +179,6 @@ echo "🔧 Compiling working context..."
 # Start fresh (context is computed, not accumulated)
 cat > "$WORKING_CONTEXT" << CONTEXT
 # Working Context
-Compiled: $(date -Iseconds)
 
 ## Current Task
 CONTEXT
@@ -244,11 +243,59 @@ if [ -f "agent-progress.txt" ]; then
     tail -30 agent-progress.txt >> "$WORKING_CONTEXT"
 fi
 
+# ============================================================================
+# Context Budget Enforcement
+# ============================================================================
+MAX_TOKENS=8000  # Hard cap for context budget
+
 # Calculate token estimate
 TOKENS=$(wc -w "$WORKING_CONTEXT" | awk '{print int($1 * 1.3)}')
+
+# If over budget, trim content
+if [ "$TOKENS" -gt "$MAX_TOKENS" ]; then
+    echo "⚠️  Context over budget ($TOKENS > $MAX_TOKENS tokens), trimming..."
+    
+    # Create trimmed version
+    TRIMMED_CONTEXT=".agent/working-context/trimmed.md"
+    
+    # Keep header and current task (most important)
+    head -50 "$WORKING_CONTEXT" > "$TRIMMED_CONTEXT"
+    
+    # Add only most recent failures (last 3 instead of 5)
+    echo "" >> "$TRIMMED_CONTEXT"
+    echo "## Known Failures (Trimmed - Last 3)" >> "$TRIMMED_CONTEXT"
+    if [ -d ".agent/memory/failures" ]; then
+        ls -t .agent/memory/failures/*.md 2>/dev/null | head -3 | while read f; do
+            [ -f "$f" ] && head -20 "$f" >> "$TRIMMED_CONTEXT"
+        done
+    fi
+    
+    # Add only most recent strategies (last 2)
+    echo "" >> "$TRIMMED_CONTEXT"
+    echo "## Working Strategies (Trimmed)" >> "$TRIMMED_CONTEXT"
+    if [ -d ".agent/memory/strategies" ]; then
+        ls -t .agent/memory/strategies/*.md 2>/dev/null | head -2 | while read f; do
+            [ -f "$f" ] && head -15 "$f" >> "$TRIMMED_CONTEXT"
+        done
+    fi
+    
+    # Truncate session summary
+    echo "" >> "$TRIMMED_CONTEXT"
+    echo "## Recent Session Summary (Trimmed)" >> "$TRIMMED_CONTEXT"
+    if [ -f "agent-progress.txt" ]; then
+        tail -15 agent-progress.txt >> "$TRIMMED_CONTEXT"
+    fi
+    
+    # Replace with trimmed version
+    mv "$TRIMMED_CONTEXT" "$WORKING_CONTEXT"
+    TOKENS=$(wc -w "$WORKING_CONTEXT" | awk '{print int($1 * 1.3)}')
+    echo "   Trimmed to ~$TOKENS tokens"
+fi
+
 echo "" >> "$WORKING_CONTEXT"
 echo "---" >> "$WORKING_CONTEXT"
 echo "Estimated tokens: ~$TOKENS" >> "$WORKING_CONTEXT"
+echo "Compiled: $(date -Iseconds)" >> "$WORKING_CONTEXT"
 
 echo "✅ Working context compiled: $WORKING_CONTEXT (~$TOKENS tokens)"
 EOF
@@ -288,6 +335,169 @@ print(json.dumps(event))
 echo "📝 Logged event: $EVENT_TYPE"
 EOF
 chmod +x .agent/hooks/log-event.sh
+
+# ============================================================================
+# Session Diff Artifacts
+# ============================================================================
+echo "📊 Creating session diff generator..."
+
+cat > .agent/hooks/save-session-diff.sh << 'EOF'
+#!/bin/bash
+# Save a diff summary artifact for the current session
+# Usage: .agent/hooks/save-session-diff.sh <session_number> <feature_id>
+
+SESSION_NUM="${1:-unknown}"
+FEATURE_ID="${2:-unknown}"
+DIFF_DIR=".agent/artifacts/code-snapshots"
+mkdir -p "$DIFF_DIR"
+
+DIFF_FILE="$DIFF_DIR/session-${SESSION_NUM}.diff"
+SUMMARY_FILE="$DIFF_DIR/session-${SESSION_NUM}-summary.md"
+
+# Get diff since last session tag or last 50 commits
+LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD 2>/dev/null | head -1)
+
+# Save full diff
+git diff "$LAST_TAG"..HEAD > "$DIFF_FILE" 2>/dev/null || git diff HEAD~10..HEAD > "$DIFF_FILE" 2>/dev/null
+
+# Generate summary
+cat > "$SUMMARY_FILE" << SUMMARY
+# Session $SESSION_NUM Diff Summary
+Feature: $FEATURE_ID
+Generated: $(date -Iseconds)
+
+## Files Changed
+$(git diff --stat "$LAST_TAG"..HEAD 2>/dev/null || git diff --stat HEAD~10..HEAD 2>/dev/null)
+
+## Summary
+- Lines added: $(git diff --numstat "$LAST_TAG"..HEAD 2>/dev/null | awk '{s+=$1}END{print s+0}')
+- Lines removed: $(git diff --numstat "$LAST_TAG"..HEAD 2>/dev/null | awk '{s+=$2}END{print s+0}')
+- Files changed: $(git diff --name-only "$LAST_TAG"..HEAD 2>/dev/null | wc -l | tr -d ' ')
+SUMMARY
+
+echo "✅ Session diff saved: $DIFF_FILE"
+EOF
+chmod +x .agent/hooks/save-session-diff.sh
+
+# ============================================================================
+# Metrics Tracking
+# ============================================================================
+echo "📈 Creating metrics tracker..."
+
+mkdir -p .agent/metrics
+
+cat > .agent/hooks/track-metrics.sh << 'EOF'
+#!/bin/bash
+# Track metrics for feedback loops
+# Usage: .agent/hooks/track-metrics.sh <event> <feature_id> [extra_data]
+
+EVENT="$1"
+FEATURE_ID="$2"
+EXTRA="$3"
+METRICS_FILE=".agent/metrics/session-metrics.jsonl"
+
+# Calculate session wall time if start time exists
+WALL_TIME=""
+if [ -f ".agent/metrics/.session-start" ]; then
+    START=$(cat .agent/metrics/.session-start)
+    NOW=$(date +%s)
+    WALL_TIME=$((NOW - START))
+fi
+
+python3 << PYEOF
+import json
+from datetime import datetime
+
+metrics = {
+    "timestamp": datetime.now().isoformat(),
+    "event": "$EVENT",
+    "feature_id": "$FEATURE_ID",
+    "wall_time_seconds": $WALL_TIME if "$WALL_TIME" else None,
+    "extra": "$EXTRA" if "$EXTRA" else None
+}
+
+# Remove None values
+metrics = {k: v for k, v in metrics.items() if v is not None}
+
+with open("$METRICS_FILE", "a") as f:
+    f.write(json.dumps(metrics) + "\n")
+PYEOF
+
+echo "📈 Tracked: $EVENT for $FEATURE_ID"
+EOF
+chmod +x .agent/hooks/track-metrics.sh
+
+cat > .agent/hooks/start-session-timer.sh << 'EOF'
+#!/bin/bash
+# Start session timer for wall time tracking
+date +%s > .agent/metrics/.session-start
+EOF
+chmod +x .agent/hooks/start-session-timer.sh
+
+cat > .agent/hooks/metrics-report.sh << 'EOF'
+#!/bin/bash
+# Generate metrics report
+# Usage: .agent/hooks/metrics-report.sh
+
+METRICS_FILE=".agent/metrics/session-metrics.jsonl"
+
+if [ ! -f "$METRICS_FILE" ]; then
+    echo "No metrics collected yet"
+    exit 0
+fi
+
+python3 << 'PYEOF'
+import json
+from collections import defaultdict
+
+metrics_file = ".agent/metrics/session-metrics.jsonl"
+events = []
+
+with open(metrics_file) as f:
+    for line in f:
+        line = line.strip()
+        if line:
+            try:
+                events.append(json.loads(line))
+            except:
+                pass
+
+if not events:
+    print("No metrics collected yet")
+    exit(0)
+
+# Aggregate metrics
+total_sessions = len([e for e in events if e.get("event") == "session_complete"])
+total_features = len([e for e in events if e.get("event") == "feature_complete"])
+retries = len([e for e in events if e.get("event") == "retry"])
+reverts = len([e for e in events if e.get("event") == "revert"])
+
+wall_times = [e.get("wall_time_seconds", 0) for e in events if e.get("wall_time_seconds")]
+avg_wall_time = sum(wall_times) / len(wall_times) if wall_times else 0
+
+# Per-feature stats
+feature_attempts = defaultdict(int)
+for e in events:
+    if e.get("event") in ("session_start", "retry"):
+        feature_attempts[e.get("feature_id", "unknown")] += 1
+
+flaky_features = [f for f, count in feature_attempts.items() if count > 2]
+
+print("=" * 50)
+print("📊 METRICS REPORT")
+print("=" * 50)
+print(f"Total sessions:     {total_sessions}")
+print(f"Features completed: {total_features}")
+print(f"Retries:            {retries}")
+print(f"Reverts:            {reverts}")
+print(f"Avg wall time:      {avg_wall_time:.1f}s")
+print(f"Flaky features:     {len(flaky_features)}")
+if flaky_features:
+    print(f"  - {', '.join(flaky_features[:5])}")
+print("=" * 50)
+PYEOF
+EOF
+chmod +x .agent/hooks/metrics-report.sh
 
 # ============================================================================
 # Memory Manager (Layer 3)
@@ -768,13 +978,13 @@ PASS=true
 
 # Standard checks
 echo -n "  Tests: "
-npm test 2>/dev/null || pytest 2>/dev/null || go test ./... 2>/dev/null && echo "✅" || { echo "❌"; PASS=false; }
+cargo test 2>/dev/null || npm test 2>/dev/null || pytest 2>/dev/null || go test ./... 2>/dev/null && echo "✅" || { echo "❌"; PASS=false; }
 
 echo -n "  Lint: "
-npm run lint 2>/dev/null || flake8 . 2>/dev/null || go vet ./... 2>/dev/null && echo "✅" || echo "⚠️"
+cargo clippy 2>/dev/null || npm run lint 2>/dev/null || flake8 . 2>/dev/null || go vet ./... 2>/dev/null && echo "✅" || echo "⚠️"
 
 echo -n "  Build: "
-npm run build 2>/dev/null || go build ./... 2>/dev/null && echo "✅" || { echo "❌"; PASS=false; }
+cargo build 2>/dev/null || npm run build 2>/dev/null || go build ./... 2>/dev/null && echo "✅" || { echo "❌"; PASS=false; }
 
 # Context-specific checks
 echo -n "  Working context size: "
@@ -1057,27 +1267,32 @@ EOF
 # ============================================================================
 echo "🔗 Creating agent integrations..."
 
-cat > CLAUDE.md << 'EOF'
+# Get version from environment or default
+HARNESS_VERSION="${CONTEXT_ENGINE_VERSION:-3.1.0}"
+
+cat > CLAUDE.md << EOF
 # Claude Code Instructions
+<!-- harness_version: $HARNESS_VERSION -->
+<!-- generated: $(date -Iseconds) -->
 
 ## Context Engineering
-This project uses a four-layer memory architecture. Read `.agent/AGENT_RULES.md`.
+This project uses a four-layer memory architecture. Read \`.agent/AGENT_RULES.md\`.
 
 ## Before Each Step
-```bash
+\`\`\`bash
 .agent/hooks/compile-context.sh
 cat .agent/working-context/current.md
 .agent/commands.sh recall failures  # Don't repeat mistakes!
-```
+\`\`\`
 
 ## ⚠️ MANDATORY: Use MCP Tools for Documentation
 If this project has MCP configured (check mcp-config.json), you MUST use MCP tools:
 
 ### Ref Documentation (if available)
 Before implementing anything with external libraries, query Ref for current docs:
-```
+\`\`\`
 Use the Ref MCP tool to look up documentation for [library/crate/package]
-```
+\`\`\`
 
 Examples:
 - "Use Ref to look up axum router documentation"
@@ -1320,6 +1535,178 @@ echo "   6. Offload to filesystem"
 echo "   7. Isolate context with sub-agents"
 echo "   8. Design for cache stability"
 echo "   9. Let context evolve through execution"
+
+# ============================================================================
+# Multi-Stack Presets Config
+# ============================================================================
+echo ""
+echo "📦 Creating stack presets config..."
+
+cat > .agent/stack-presets.yaml << 'EOF'
+# Stack Presets Configuration
+# Define custom stacks or override defaults
+# Usage: Set STACK_PRESET env var or specify in feature_list.json
+
+presets:
+  rust:
+    name: "Rust"
+    init_commands:
+      - cargo init
+    test_command: cargo test
+    build_command: cargo build
+    lint_command: cargo clippy
+    mcp_preset: rust-docs
+    file_extensions: [.rs]
+    
+  node:
+    name: "Node.js"
+    init_commands:
+      - npm init -y
+    test_command: npm test
+    build_command: npm run build
+    lint_command: npm run lint
+    mcp_preset: web-dev
+    file_extensions: [.js, .ts, .jsx, .tsx]
+    
+  python:
+    name: "Python"
+    init_commands:
+      - python -m venv venv
+      - pip install pytest
+    test_command: pytest
+    build_command: python -m build
+    lint_command: flake8 .
+    mcp_preset: python-docs
+    file_extensions: [.py]
+    
+  go:
+    name: "Go"
+    init_commands:
+      - go mod init
+    test_command: go test ./...
+    build_command: go build ./...
+    lint_command: go vet ./...
+    mcp_preset: go-docs
+    file_extensions: [.go]
+
+  react:
+    name: "React"
+    init_commands:
+      - npx create-react-app .
+    test_command: npm test
+    build_command: npm run build
+    lint_command: npm run lint
+    mcp_preset: web-dev
+    file_extensions: [.jsx, .tsx, .js, .ts]
+
+# Custom presets can be added here
+# my-stack:
+#   name: "My Custom Stack"
+#   test_command: ./run-tests.sh
+#   ...
+EOF
+
+# ============================================================================
+# CI/CD Template
+# ============================================================================
+echo "🔄 Creating CI template..."
+
+mkdir -p .github/workflows
+
+cat > .github/workflows/context-engine-ci.yml << 'EOF'
+# Context Engine CI
+# Runs quality gates on each commit to keep the autonomous loop honest
+
+name: Context Engine CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup project
+        run: |
+          # Install dependencies based on stack
+          if [ -f "Cargo.toml" ]; then
+            rustup update stable
+          elif [ -f "package.json" ]; then
+            npm ci
+          elif [ -f "requirements.txt" ]; then
+            pip install -r requirements.txt
+          elif [ -f "go.mod" ]; then
+            go mod download
+          fi
+      
+      - name: Run tests
+        run: |
+          if [ -f "Cargo.toml" ]; then
+            cargo test
+          elif [ -f "package.json" ]; then
+            npm test
+          elif [ -f "requirements.txt" ]; then
+            pytest
+          elif [ -f "go.mod" ]; then
+            go test ./...
+          fi
+      
+      - name: Run lints
+        run: |
+          if [ -f "Cargo.toml" ]; then
+            cargo clippy -- -D warnings
+          elif [ -f "package.json" ]; then
+            npm run lint || true
+          elif [ -f "requirements.txt" ]; then
+            flake8 . || true
+          elif [ -f "go.mod" ]; then
+            go vet ./...
+          fi
+      
+      - name: Check feature list
+        run: |
+          if [ -f "feature_list.json" ]; then
+            # Validate JSON syntax
+            python3 -c "import json; json.load(open('feature_list.json'))"
+            echo "✅ feature_list.json is valid JSON"
+          fi
+      
+      - name: Context size check
+        run: |
+          if [ -f ".agent/working-context/current.md" ]; then
+            TOKENS=$(wc -w .agent/working-context/current.md | awk '{print int($1 * 1.3)}')
+            echo "Working context: ~$TOKENS tokens"
+            if [ "$TOKENS" -gt 10000 ]; then
+              echo "⚠️ Warning: Context is large, consider compaction"
+            fi
+          fi
+EOF
+
+echo "   Created .github/workflows/context-engine-ci.yml"
+
+# ============================================================================
+# Version File
+# ============================================================================
+cat > .agent/VERSION << EOF
+# Context Engine Version
+version: ${CONTEXT_ENGINE_VERSION:-3.1.0}
+initialized: $(date -Iseconds)
+features:
+  - four-layer-memory
+  - context-budget-enforcement
+  - topological-dependency-sort
+  - session-diff-artifacts
+  - metrics-tracking
+  - needs-review-gates
+  - multi-stack-presets
+  - ci-integration
+EOF
+
 echo ""
 echo "🚀 Next Steps:"
 echo "   1. Read .agent/AGENT_RULES.md"

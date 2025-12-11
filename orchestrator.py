@@ -24,7 +24,8 @@ from typing import Optional, Dict, Any, List
 # Configuration
 # ============================================================================
 
-HARNESS_PATH = Path.home() / "tools" / "agent-harness"
+# HARNESS_PATH: Use env var, or default to script's directory
+HARNESS_PATH = Path(os.environ.get('CONTEXT_ENGINE_PATH', Path(__file__).parent.resolve()))
 DEFAULT_MODEL = "sonnet"  # or "opus" for complex projects
 MAX_SESSIONS = 100  # Safety limit
 SESSION_TIMEOUT = 3600  # 1 hour max per session
@@ -40,10 +41,17 @@ def get_feature_complexity(feature: Dict[str, Any]) -> str:
     Estimate feature complexity to determine subagent requirements.
     Returns: 'high', 'medium', or 'low'
     
+    Can be overridden by setting "complexity" field in feature_list.json
+    
     High complexity = full subagent ceremony (code-reviewer, test-runner, feature-verifier)
     Medium complexity = just test-runner
     Low complexity = just run tests, no subagents
     """
+    # Manual override takes precedence
+    override = feature.get('complexity', '').lower()
+    if override in ('high', 'medium', 'low'):
+        return override
+    
     signals = 0
     
     category = feature.get('category', '').lower()

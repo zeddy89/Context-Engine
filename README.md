@@ -34,16 +34,38 @@ Each session starts fresh with computed context instead of accumulated garbage.
 
 The loop runs overnight. Each session: compile context → implement feature → run tests → subagent review → commit → exit. Repeat until done.
 
-![Session 18 running autonomously](docs/session-screenshot.jpg)
+![Session 18 running autonomously](docs/session-screenshot.png)
 
 ## Quick Start
+
+### Option 1: Native Hooks Mode (Interactive)
+
+Use Claude Code interactively with context that survives `/clear` and `/compact`:
 
 ```bash
 # Clone
 git clone https://github.com/zeddy89/context-engine.git
 cd context-engine
+./install.sh
 
-# Install (just copies scripts)
+# Set up native hooks in your project
+cd ~/projects/my-app
+~/tools/context-engine/setup-native-hooks.sh
+
+# Start Claude Code normally
+claude
+# Run /hooks to approve, then work as usual
+# Context auto-restores on /clear, /compact, and session resume
+```
+
+### Option 2: Autonomous Loop (Unattended)
+
+Let it build features overnight without intervention:
+
+```bash
+# Clone
+git clone https://github.com/zeddy89/context-engine.git
+cd context-engine
 ./install.sh
 
 # Create a new project
@@ -52,6 +74,13 @@ python3 ~/tools/context-engine/orchestrator.py --new ~/projects/my-app --model o
 # Or run fully autonomous after init
 ~/tools/context-engine/loop-runner.py ~/projects/my-app --model opus
 ```
+
+### Which Mode?
+
+| Mode | Use When |
+|------|----------|
+| **Native Hooks** | Day-to-day interactive coding with Claude |
+| **Autonomous Loop** | "Build this whole app while I sleep" |
 
 ## Requirements
 
@@ -113,6 +142,35 @@ This will:
 7. Commit and repeat
 
 Stop it anytime with Ctrl+C. Resume later - it picks up where it left off.
+
+### Native Hooks Mode
+
+For interactive use without the autonomous loop:
+
+```bash
+cd ~/projects/my-app
+~/tools/context-engine/setup-native-hooks.sh
+claude
+```
+
+**What it does:**
+- Injects compiled context on session start
+- Saves snapshots before `/compact`
+- Restores context after `/clear` or `/compact`
+- Tracks progress in `.agent/metrics/`
+
+**Requirements:**
+- Claude Code 1.0.17+ (tested on 2.0.65)
+- Python 3.8+
+- Linux/macOS (Windows: use WSL)
+
+**Environment Variables:**
+```bash
+# Enable auto-completion of features when tests pass (advanced)
+export CONTEXT_ENGINE_WRITE_MODE=1
+```
+
+See [docs/NATIVE-HOOKS.md](docs/NATIVE-HOOKS.md) for full documentation.
 
 ### Continue Existing Project
 
@@ -233,18 +291,6 @@ The harness includes specialized subagents that Claude Code invokes during imple
 | `@test-runner` | Runs tests and analyzes failures |
 | `@feature-verifier` | End-to-end feature verification |
 | `@debugger` | Analyzes errors and suggests fixes |
-
-### Smart Complexity Detection
-
-The harness now automatically detects feature complexity and adjusts subagent usage:
-
-**HIGH complexity** (security, crypto, auth, ssh, credentials, permissions): Uses all 3 subagents (code-reviewer, test-runner, feature-verifier)
-
-**MEDIUM complexity** (api, endpoint, database, repository, patch, service, handler): Uses just test-runner subagent
-
-**LOW complexity** (refactor, rename, cleanup, docs, simple changes): Just runs tests directly, no subagents
-
-This speeds up simple features from ~10 min to ~4-5 min while keeping thorough review for security-sensitive code. The complexity is shown in the output like: `🔧 Implementing: patch-002 [MEDIUM] - description...`
 
 ## MCP Integration
 
